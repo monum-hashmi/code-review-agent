@@ -49,7 +49,9 @@ Diff:
 Relevant codebase context:
 {context}
 
-Find security issues only. Return a list of specific findings.""")
+Find security issues only. You MUST respond with ONLY this JSON format, nothing else:
+{{"findings": ["issue 1", "issue 2"]}}
+If no issues found: {{"findings": []}}""")
 ])
 
 

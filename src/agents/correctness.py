@@ -57,8 +57,10 @@ Diff:
 Relevant codebase context:
 {context}
 
-Find correctness issues only. Return a list of specific findings.""")
-])
+Find correctness issues only. You MUST respond with ONLY this JSON format, nothing else:
+{{"findings": ["issue 1", "issue 2"]}}
+If no issues found: {{"findings": []}}""")])
+
 
 
 # ── Entry Point ────────────────────────────────────────────────────────────────

@@ -46,7 +46,9 @@ Diff:
 Existing codebase style (for reference):
 {context}
 
-Find style issues only. Return a list of specific findings.""")
+Find style issues only. You MUST respond with ONLY this JSON format, nothing else:
+{{"findings": ["issue 1", "issue 2"]}}
+If no issues found: {{"findings": []}}""")
 ])
 
 
