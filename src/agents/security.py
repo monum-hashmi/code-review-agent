@@ -18,7 +18,7 @@ def _get_llm():
         openai_api_key=settings.openrouter_api_key,
         openai_api_base=settings.openrouter_base_url,
         temperature=0,
-    ).with_structured_output(SecurityFindings)
+    )
 
 
 PROMPT = ChatPromptTemplate.from_messages([
@@ -54,10 +54,7 @@ Find security issues only. Return a list of specific findings.""")
 
 
 def run(pr_data: PRData, context: list[str]) -> list[str]:
-    """
-    Called by security_node in graph.py.
-    Returns list of security issues as strings.
-    """
+    import json, re
     llm = _get_llm()
     chain = PROMPT | llm
 
@@ -68,4 +65,16 @@ def run(pr_data: PRData, context: list[str]) -> list[str]:
         "context": "\n---\n".join(context) if context else "No context available.",
     })
 
-    return result.findings
+    text = result.content
+    text = re.sub(r"```json|```", "", text).strip()
+    
+    if not text:
+        return []
+    
+    try:
+        parsed = json.loads(text)
+        return parsed.get("findings", [])
+    except json.JSONDecodeError:
+        # LLM returned plain text instead of JSON — extract lines as findings
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        return lines if lines else []

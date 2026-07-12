@@ -1,3 +1,5 @@
+from itertools import chain
+
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
@@ -22,7 +24,7 @@ def _get_llm():
         openai_api_key=settings.openrouter_api_key,
         openai_api_base=settings.openrouter_base_url,
         temperature=0,
-    ).with_structured_output(CorrectnessFindings)
+    )
 
 
 # ── Prompt ─────────────────────────────────────────────────────────────────────
@@ -62,11 +64,7 @@ Find correctness issues only. Return a list of specific findings.""")
 # ── Entry Point ────────────────────────────────────────────────────────────────
 
 def run(pr_data: PRData, context: list[str]) -> list[str]:
-    """
-    Called by correctness_node in graph.py.
-    Takes PR data + retrieved codebase context.
-    Returns list of correctness issues as strings.
-    """
+    import json, re
     llm = _get_llm()
     chain = PROMPT | llm
 
@@ -75,8 +73,20 @@ def run(pr_data: PRData, context: list[str]) -> list[str]:
         "description": pr_data.description,
         "author": pr_data.author,
         "changed_files": "\n".join(pr_data.changed_files),
-        "diff": pr_data.diff[:3000],  # cap to avoid token blowup
+        "diff": pr_data.diff[:3000],
         "context": "\n---\n".join(context) if context else "No context available.",
     })
 
-    return result.findings
+    text = result.content
+    text = re.sub(r"```json|```", "", text).strip()
+    
+    if not text:
+        return []
+    
+    try:
+        parsed = json.loads(text)
+        return parsed.get("findings", [])
+    except json.JSONDecodeError:
+        # LLM returned plain text instead of JSON — extract lines as findings
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        return lines if lines else []
