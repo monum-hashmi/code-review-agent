@@ -1,22 +1,12 @@
-from itertools import chain
+import json
+import re
 
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel, Field
 
 from src.config import settings
 from src.pr_fetcher import PRData
 
-
-# ── Output Schema ──────────────────────────────────────────────────────────────
-
-class CorrectnessFindings(BaseModel):
-    findings: list[str] = Field(
-        description="List of correctness issues found. Empty list if none."
-    )
-
-
-# ── LLM Setup ─────────────────────────────────────────────────────────────────
 
 def _get_llm():
     return ChatOpenAI(
@@ -27,68 +17,142 @@ def _get_llm():
     )
 
 
-# ── Prompt ─────────────────────────────────────────────────────────────────────
-
 PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a senior software engineer reviewing a pull request for correctness.
-Your job is to find real bugs — not style issues, not security issues, just logic errors.
+    ("system", """You are a senior software engineer doing a correctness review of a pull request.
+Find REAL BUGS only. Not style, not security — only logic errors.
 
-Look for:
-- Logic bugs and wrong conditions
-- Null/None checks that are missing
-- Off-by-one errors
-- Unhandled edge cases
-- Incorrect error handling
-- Functions that don't do what their name says
+Check systematically for:
+- Wrong boolean conditions (using 'and' instead of 'or', inverted checks)
+- Off-by-one errors in loops, slicing, range()
+- Null/None/undefined access without guards
+- Variables used before assignment or after reassignment
+- Exception handling that swallows errors silently (bare except, catching too broad)
+- Return values that are never used or wrong type returned
+- Functions that mutate input arguments unexpectedly
+- Race conditions or shared mutable state
+- Missing break/continue/return causing fall-through
+- Incorrect string formatting (f-string with wrong variable, .format mismatches)
+- Integer division when float was needed (or vice versa)
+- Comparison with 'is' when '==' was needed
+- Mutable default arguments (def f(x=[]))
 
-Be specific. Reference the exact file and line when possible.
-If you find nothing, return an empty list. Do not invent issues."""),
+RULES:
+- Only report issues you are confident about. Do NOT invent problems.
+- Reference the exact filename and the code line/pattern.
+- Explain WHY it's a bug and what the fix is.
+- If the diff is clean, return an empty findings array.
 
-    ("human", """PR Title: {title}
-PR Description: {description}
+Respond with ONLY valid JSON, no markdown fences, no explanation outside the JSON."""),
+
+    ("human", """PR: {title}
+Description: {description}
 Author: {author}
 
-Changed Files:
-{changed_files}
+File being reviewed: {current_file}
 
-Diff:
-{diff}
+Diff for this file:
+```
+{file_diff}
+```
 
-Relevant codebase context:
+Other changed files in this PR: {other_files}
+
+Codebase context (related existing code):
 {context}
 
-Find correctness issues only. You MUST respond with ONLY this JSON format, nothing else:
-{{"findings": ["issue 1", "issue 2"]}}
-If no issues found: {{"findings": []}}""")])
+Return ONLY this JSON:
+{{
+  "findings": [
+    {{
+      "file": "exact/filename.py",
+      "line": "the problematic code line or pattern",
+      "severity": "high|medium|low",
+      "issue": "what the bug is",
+      "suggestion": "how to fix it"
+    }}
+  ]
+}}
+If no issues: {{"findings": []}}""")])
 
 
+MAX_DIFF_CHARS = 6000  # per file
 
-# ── Entry Point ────────────────────────────────────────────────────────────────
 
-def run(pr_data: PRData, context: list[str]) -> list[str]:
-    import json, re
+def run(pr_data: PRData, context: list[str]) -> list[dict]:
     llm = _get_llm()
     chain = PROMPT | llm
+    all_findings = []
 
-    result = chain.invoke({
-        "title": pr_data.title,
-        "description": pr_data.description,
-        "author": pr_data.author,
-        "changed_files": "\n".join(pr_data.changed_files),
-        "diff": pr_data.diff[:3000],
-        "context": "\n---\n".join(context) if context else "No context available.",
-    })
+    file_diffs = pr_data.file_diffs if pr_data.file_diffs else []
 
-    text = result.content
+    # If no per-file diffs available, fall back to full diff
+    if not file_diffs:
+        file_diffs = [type("F", (), {"filename": "unknown", "patch": pr_data.diff[:MAX_DIFF_CHARS]})]
+
+    for fd in file_diffs:
+        # Skip non-code files
+        if _skip_file(fd.filename):
+            continue
+
+        patch = fd.patch if isinstance(fd.patch, str) else ""
+        if not patch.strip():
+            continue
+
+        other_files = [f for f in pr_data.changed_files if f != fd.filename]
+
+        try:
+            result = chain.invoke({
+                "title": pr_data.title,
+                "description": pr_data.description,
+                "author": pr_data.author,
+                "current_file": fd.filename,
+                "file_diff": patch[:MAX_DIFF_CHARS],
+                "other_files": ", ".join(other_files) if other_files else "None",
+                "context": "\n---\n".join(context) if context else "No context available.",
+            })
+            findings = _parse_findings(result.content, fd.filename)
+            all_findings.extend(findings)
+        except Exception as e:
+            print(f"[correctness] Error reviewing {fd.filename}: {e}")
+
+    return all_findings
+
+
+def _skip_file(filename: str) -> bool:
+    skip_ext = {".md", ".txt", ".json", ".yml", ".yaml", ".toml", ".cfg",
+                ".ini", ".lock", ".png", ".jpg", ".svg", ".ico", ".gif",
+                ".woff", ".woff2", ".ttf", ".eot", ".map", ".min.js", ".min.css"}
+    skip_names = {"package-lock.json", "yarn.lock", "poetry.lock", ".gitignore",
+                  "LICENSE", "CHANGELOG.md", "requirements.txt"}
+    lower = filename.lower()
+    if any(lower.endswith(ext) for ext in skip_ext):
+        return True
+    if filename.split("/")[-1] in skip_names:
+        return True
+    return False
+
+
+def _parse_findings(text: str, fallback_file: str) -> list[dict]:
     text = re.sub(r"```json|```", "", text).strip()
-    
     if not text:
         return []
-    
     try:
         parsed = json.loads(text)
-        return parsed.get("findings", [])
+        findings = parsed.get("findings", [])
+        # Normalize each finding
+        result = []
+        for f in findings:
+            if isinstance(f, str):
+                result.append({"file": fallback_file, "issue": f, "severity": "medium", "line": "", "suggestion": ""})
+            elif isinstance(f, dict):
+                result.append({
+                    "file": f.get("file", fallback_file),
+                    "line": f.get("line", ""),
+                    "severity": f.get("severity", "medium"),
+                    "issue": f.get("issue", str(f)),
+                    "suggestion": f.get("suggestion", ""),
+                })
+        return result
     except json.JSONDecodeError:
-        # LLM returned plain text instead of JSON — extract lines as findings
         lines = [l.strip() for l in text.split("\n") if l.strip()]
-        return lines if lines else []
+        return [{"file": fallback_file, "issue": l, "severity": "medium", "line": "", "suggestion": ""} for l in lines]

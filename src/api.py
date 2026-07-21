@@ -6,6 +6,7 @@ import structlog
 from fastapi import FastAPI, HTTPException, Header, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
+from fastapi.staticfiles import StaticFiles
 
 from src.config import settings
 from src.graph import review_graph
@@ -17,20 +18,20 @@ logger = structlog.get_logger()
 
 class ReviewRequest(BaseModel):
     pr_url: str
-    index_repo: bool = False  # if True, index the repo before reviewing
+    index_repo: bool = False
 
 
 class ReviewResponse(BaseModel):
     pr_url: str
     final_review: str
-    correctness_findings: list[str]
-    style_findings: list[str]
-    security_findings: list[str]
+    correctness_findings: list = []
+    style_findings: list = []
+    security_findings: list = []
     error: str | None = None
 
 
 class IndexRequest(BaseModel):
-    repo_url: str  # e.g. https://github.com/owner/repo
+    repo_url: str
 
 
 class IndexResponse(BaseModel):
@@ -66,7 +67,6 @@ def verify_api_key(x_api_key: str = Header(...)):
 
 @app.get("/health")
 def health():
-    """Health check — first thing you hit after EC2 deployment."""
     return {"status": "ok", "model": settings.model_name}
 
 
@@ -75,19 +75,13 @@ def review_pr(
     request: ReviewRequest,
     api_key: str = Depends(verify_api_key),
 ):
-    """
-    Main endpoint. Takes a GitHub PR URL, runs the full
-    LangGraph pipeline, returns structured review findings.
-    """
     logger.info("review_requested", pr_url=request.pr_url)
 
-    # Optionally index the repo first
     if request.index_repo:
         from src.indexer import index_repo
         repo_url = _pr_url_to_repo_url(request.pr_url)
         index_repo(repo_url)
 
-    # Run the LangGraph pipeline
     initial_state = {
         "pr_url": request.pr_url,
         "pr_data": None,
@@ -123,10 +117,6 @@ def index_repository(
     request: IndexRequest,
     api_key: str = Depends(verify_api_key),
 ):
-    """
-    Index a repo into ChromaDB so the review agents
-    have codebase context when reviewing PRs.
-    """
     from src.indexer import index_repo
 
     logger.info("index_requested", repo_url=request.repo_url)
@@ -141,9 +131,9 @@ def index_repository(
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _pr_url_to_repo_url(pr_url: str) -> str:
-    """
-    Converts https://github.com/owner/repo/pull/123
-    to      https://github.com/owner/repo
-    """
     parts = pr_url.split("/pull/")
     return parts[0]
+
+
+# Static files — MUST be last, after all routes
+app.mount("/", StaticFiles(directory="static", html=True), name="static")

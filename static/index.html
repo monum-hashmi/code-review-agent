@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Review Agent</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #262b36;
+    --text: #e6e9ef; --muted: #8b93a7; --accent: #6366f1;
+    --red: #ef4444; --amber: #f59e0b; --green: #10b981; --blue: #3b82f6;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 32px 20px;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 22px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 2px 0 24px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  input[type=text] {
+    flex: 1; min-width: 260px; padding: 11px 13px; border-radius: 8px;
+    border: 1px solid var(--border); background: #0d0f14; color: var(--text); font-size: 14px;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  button {
+    padding: 11px 20px; border: 0; border-radius: 8px; background: var(--accent);
+    color: #fff; font-weight: 600; font-size: 14px; cursor: pointer; white-space: nowrap;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  label.chk { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 13px; margin-top: 12px; }
+  #status { margin-top: 14px; font-size: 13px; color: var(--muted); min-height: 20px; }
+  .err { color: var(--red); }
+  .spinner {
+    display: inline-block; width: 13px; height: 13px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite;
+    vertical-align: -2px; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Stats bar */
+  .stats { display: flex; gap: 12px; margin: 20px 0 16px; flex-wrap: wrap; }
+  .stat { padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; }
+  .stat-sec { background: #ef44441a; color: var(--red); }
+  .stat-cor { background: #f59e0b1a; color: var(--amber); }
+  .stat-sty { background: #3b82f61a; color: var(--blue); }
+  .stat-ok  { background: #10b9811a; color: var(--green); }
+
+  /* Findings */
+  .section { margin-bottom: 16px; }
+  .sec-header { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; padding: 14px 20px 10px; font-weight: 700; }
+  .c-cor { color: var(--amber); } .c-sty { color: var(--blue); } .c-sec { color: var(--red); }
+  .finding { padding: 14px 20px; border-bottom: 1px solid var(--border); }
+  .finding:last-child { border-bottom: none; }
+  .f-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  .sev {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 7px;
+    border-radius: 4px; letter-spacing: .04em;
+  }
+  .sev-high { background: #ef44442a; color: var(--red); }
+  .sev-medium { background: #f59e0b2a; color: var(--amber); }
+  .sev-low { background: #3b82f62a; color: var(--blue); }
+  .f-file { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); }
+  .f-issue { font-size: 14px; line-height: 1.5; }
+  .f-line { font-family: ui-monospace, monospace; font-size: 12px; background: #0d0f14; padding: 4px 8px; border-radius: 4px; color: var(--amber); margin: 6px 0; display: inline-block; max-width: 100%; overflow-x: auto; }
+  .f-suggestion { font-size: 13px; color: var(--green); margin-top: 4px; }
+  .f-suggestion::before { content: "Fix: "; font-weight: 600; }
+  .empty { color: var(--muted); font-size: 13px; font-style: italic; padding: 14px 20px; }
+
+  /* Full review */
+  pre.review {
+    white-space: pre-wrap; word-wrap: break-word;
+    font: 13px/1.7 ui-monospace, "Cascadia Code", monospace;
+    background: #0d0f14; border: 1px solid var(--border); border-radius: 8px; padding: 16px;
+  }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Code Review Agent</h1>
+  <div class="sub">Multi-agent PR review &mdash; correctness, style, security</div>
+
+  <div class="card">
+    <div class="row">
+      <input id="url" type="text" placeholder="https://github.com/owner/repo/pull/123">
+      <button id="go">Review PR</button>
+    </div>
+    <label class="chk"><input id="idx" type="checkbox"> Index repo first (slower)</label>
+    <div id="status"></div>
+  </div>
+
+  <div id="results" class="hidden">
+    <div class="stats" id="stats"></div>
+
+    <div class="section card" id="sec-sec"><div class="sec-header c-sec">Security</div><div id="l-sec"></div></div>
+    <div class="section card" id="sec-cor"><div class="sec-header c-cor">Correctness</div><div id="l-cor"></div></div>
+    <div class="section card" id="sec-sty"><div class="sec-header c-sty">Style</div><div id="l-sty"></div></div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="sec-header" style="color:var(--muted)">Full Review</div>
+      <pre class="review" id="final"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = "";
+const API_KEY  = "dev-key-change-in-prod";
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function renderFindings(list, elId) {
+  const el = $(elId);
+  const items = Array.isArray(list) ? list : [];
+  if (!items.length) {
+    el.innerHTML = '<div class="empty">No issues found.</div>';
+    return;
+  }
+  el.innerHTML = items.map(f => {
+    if (typeof f === "string") return `<div class="finding"><div class="f-issue">${esc(f)}</div></div>`;
+    const sev = (f.severity || "medium").toLowerCase();
+    return `<div class="finding">
+      <div class="f-top">
+        <span class="sev sev-${sev}">${esc(sev)}</span>
+        <span class="f-file">${esc(f.file || "")}</span>
+      </div>
+      <div class="f-issue">${esc(f.issue || "")}</div>
+      ${f.line ? `<div class="f-line">${esc(f.line)}</div>` : ""}
+      ${f.suggestion ? `<div class="f-suggestion">${esc(f.suggestion)}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+function renderStats(sec, cor, sty) {
+  const total = sec.length + cor.length + sty.length;
+  if (total === 0) {
+    $("stats").innerHTML = '<div class="stat stat-ok">All Clear — No Issues Found</div>';
+    return;
+  }
+  let html = "";
+  if (sec.length) html += `<div class="stat stat-sec">${sec.length} Security</div>`;
+  if (cor.length) html += `<div class="stat stat-cor">${cor.length} Correctness</div>`;
+  if (sty.length) html += `<div class="stat stat-sty">${sty.length} Style</div>`;
+  $("stats").innerHTML = html;
+}
+
+async function review() {
+  const url = $("url").value.trim();
+  if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(url)) {
+    $("status").innerHTML = '<span class="err">Enter a valid GitHub PR URL.</span>';
+    return;
+  }
+  $("go").disabled = true;
+  $("results").classList.add("hidden");
+  $("status").innerHTML = '<span class="spinner"></span>Running agents… this can take 30–90s.';
+
+  try {
+    const res = await fetch(API_BASE + "/review", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": API_KEY },
+      body: JSON.stringify({ pr_url: url, index_repo: $("idx").checked })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} — ${(await res.text()).slice(0, 300)}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    const sec = data.security_findings || [];
+    const cor = data.correctness_findings || [];
+    const sty = data.style_findings || [];
+
+    renderStats(sec, cor, sty);
+    renderFindings(sec, "l-sec");
+    renderFindings(cor, "l-cor");
+    renderFindings(sty, "l-sty");
+
+    // Hide empty sections
+    $("sec-sec").style.display = sec.length ? "" : "none";
+    $("sec-cor").style.display = cor.length ? "" : "none";
+    $("sec-sty").style.display = sty.length ? "" : "none";
+
+    $("final").textContent = data.final_review || "(no summary returned)";
+    $("results").classList.remove("hidden");
+    $("status").textContent = "Done.";
+  } catch (e) {
+    $("status").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  } finally {
+    $("go").disabled = false;
+  }
+}
+
+$("go").onclick = review;
+$("url").addEventListener("keydown", e => { if (e.key === "Enter") review(); });
+</script>
+</body>
+</html>
