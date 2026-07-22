@@ -1,3 +1,4 @@
+@"
 import os
 import pickle
 
@@ -12,7 +13,8 @@ def get_user(name):
 
 def process(items):
     result = []
-    for i in range(1, len(items)):  # off-by-one: skips first item
-        if items[i] = "admin":      # assignment instead of comparison
+    for i in range(1, len(items)):
+        if items[i] == "admin":
             result.append(items[i])
     return result
+"@ | Out-File -Encoding utf8 src/test_bad.py
