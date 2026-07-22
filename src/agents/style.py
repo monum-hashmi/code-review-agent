@@ -34,6 +34,11 @@ Check for:
 - Overly complex list comprehensions that hurt readability
 - Imports that are unused or could be more specific
 
+LIMITS:
+- Do NOT flag security issues like hardcoded secrets — that is the security agent's job.
+- Return a MAXIMUM of 10 findings. Focus on the most impactful issues only.
+- Skip trivial nitpicks like "magic string" for one-off constants.
+
 RULES:
 - Use the codebase context to judge existing style. Don't enforce YOUR preferences — enforce THEIR patterns.
 - If the PR matches the existing codebase style, return empty findings.
@@ -139,5 +144,6 @@ def _parse_findings(text: str, fallback_file: str) -> list[dict]:
                 })
         return result
     except json.JSONDecodeError:
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
-        return [{"file": fallback_file, "issue": l, "severity": "medium", "line": "", "suggestion": ""} for l in lines]
+        lines = [l.strip() for l in text.split("\n") if l.strip() and len(l.strip()) > 20]
+        return [{"file": fallback_file, "issue": l, "severity": "medium", "line": "", "suggestion": ""} for l in lines[:10]]
+    

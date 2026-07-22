@@ -164,5 +164,5 @@ def _parse_findings(text: str, fallback_file: str) -> list[dict]:
                 })
         return result
     except json.JSONDecodeError:
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
-        return [{"file": fallback_file, "issue": l, "severity": "high", "line": "", "suggestion": ""} for l in lines]
+        lines = [l.strip() for l in text.split("\n") if l.strip() and len(l.strip()) > 20]
+        return [{"file": fallback_file, "issue": l, "severity": "high", "line": "", "suggestion": ""} for l in lines[:10]]
