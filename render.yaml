@@ -1,0 +1,17 @@
+﻿services:
+  - type: web
+    name: code-review-agent
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn src.api:app --host 0.0.0.0 --port 10000
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: MODEL_NAME
+        value: deepseek/deepseek-chat
+      - key: CHROMA_PERSIST_DIR
+        value: /tmp/chroma_db
